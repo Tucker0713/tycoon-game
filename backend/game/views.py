@@ -1,0 +1,126 @@
+from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from rest_framework import status
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+
+from . import services
+from .models import PlayerNode, PlayerProfile, ResourceNode
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def register_user(request):
+    username = (request.data.get('username') or '').strip()
+    password = request.data.get('password') or ''
+
+    if not username or not password:
+        return Response({'error': 'Username and password required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(username=username).exists():
+        return Response({'error': 'Username already taken'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        validate_password(password, user=User(username=username))
+    except ValidationError as e:
+        return Response({'error': ' '.join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.create_user(username=username, password=password)
+    PlayerProfile.objects.get_or_create(user=user)
+    token, _ = Token.objects.get_or_create(user=user)
+
+    return Response({
+        'token': token.key,
+        'username': user.username,
+        'message': 'Registration successful!',
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def login_user(request):
+    username = (request.data.get('username') or '').strip()
+    password = request.data.get('password') or ''
+
+    if not username or not password:
+        return Response({'error': 'Username and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = authenticate(username=username, password=password)
+    if user is None:
+        return Response({'error': 'Invalid username or password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    PlayerProfile.objects.get_or_create(user=user)
+    token, _ = Token.objects.get_or_create(user=user)
+
+    return Response({
+        'token': token.key,
+        'username': user.username,
+        'is_superuser': user.is_superuser,
+        'message': 'Login successful!',
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def game_state_view(request):
+    """Settle earnings since last visit and return the full game state."""
+    with transaction.atomic():
+        profile = services.get_locked_profile(request.user)
+        earned = services.settle(profile)
+        return Response(services.serialize_state(profile, offline_earned=earned))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def buy_node_view(request):
+    """Buy one level of a node. The server checks the price; the client can't fake it."""
+    try:
+        node = ResourceNode.objects.get(pk=int(request.data.get('node_id')))
+    except (TypeError, ValueError):
+        return Response({'error': 'node_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    except ResourceNode.DoesNotExist:
+        return Response({'error': 'Node not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    with transaction.atomic():
+        profile = services.get_locked_profile(request.user)
+        services.settle(profile)
+
+        owned, _ = PlayerNode.objects.get_or_create(player=profile, node=node)
+        cost = services.node_cost(node, owned.level)
+
+        if profile.currency < cost:
+            body = services.serialize_state(profile)
+            body['error'] = 'Not enough currency.'
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+
+        profile.currency -= cost
+        profile.save(update_fields=['currency'])
+        owned.level += 1
+        owned.save(update_fields=['level'])
+
+        return Response(services.serialize_state(profile))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def gather_view(request):
+    """Credit manual clicks. The client batches clicks; the server clamps the batch size."""
+    try:
+        clicks = int(request.data.get('clicks', 1))
+    except (TypeError, ValueError):
+        return Response({'error': 'clicks must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+    clicks = max(0, min(clicks, services.MAX_CLICKS_PER_REQUEST))
+
+    with transaction.atomic():
+        profile = services.get_locked_profile(request.user)
+        services.settle(profile)
+        profile.currency += clicks * services.CLICK_VALUE * profile.prestige_multiplier
+        profile.save(update_fields=['currency'])
+        return Response(services.serialize_state(profile))
