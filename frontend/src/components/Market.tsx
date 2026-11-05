@@ -8,7 +8,7 @@ export const Market: React.FC = () => {
     const totalValue = producers.reduce((sum, n) => sum + n.stock * n.sell_price, 0);
 
     return (
-        <div className="w-full max-w-md mb-8 bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-md">
+        <div className="w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-md">
             <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-bold text-slate-100">🏪 Market</h2>
                 <button

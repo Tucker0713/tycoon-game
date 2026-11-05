@@ -97,6 +97,11 @@ def buy_node_view(request):
         owned, _ = PlayerNode.objects.get_or_create(player=profile, node=node)
         cost = services.node_cost(node, owned.level)
 
+        if owned.level >= services.MAX_NODE_LEVEL:
+            body = services.serialize_state(profile)
+            body['error'] = 'This producer is already at max level.'
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
+
         if profile.currency < cost:
             body = services.serialize_state(profile)
             body['error'] = 'Not enough gold.'
@@ -106,6 +111,47 @@ def buy_node_view(request):
         profile.save(update_fields=['currency'])
         owned.level += 1
         owned.save(update_fields=['level'])
+
+        return Response(services.serialize_state(profile))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def collect_view(request):
+    """Collect spawned pickups. Body: {items: [{node_id, count}, ...]}.
+
+    Each pickup moves one producer interval of output from `pending` to `stock`. The server never
+    moves more than the producer has actually made, so the client can't invent resources.
+    """
+    items = request.data.get('items')
+    if not isinstance(items, list):
+        return Response({'error': 'items must be a list.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        profile = services.get_locked_profile(request.user)
+        services.settle(profile)
+
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                node_id = int(entry.get('node_id'))
+                count = int(entry.get('count', 1))
+            except (TypeError, ValueError):
+                continue
+            count = max(0, min(count, services.MAX_COLLECT_PER_ENTRY))
+            if count == 0:
+                continue
+
+            pn = profile.owned_nodes.select_related('node').filter(node_id=node_id, level__gt=0).first()
+            if pn is None:
+                continue
+
+            value = services.item_value(pn.node, pn.level, profile.prestige_multiplier)
+            amount = min(count * value, pn.pending)
+            pn.pending -= amount
+            pn.stock += amount
+            pn.save(update_fields=['pending', 'stock'])
 
         return Response(services.serialize_state(profile))
 

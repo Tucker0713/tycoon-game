@@ -4,7 +4,11 @@ import API from '../services/api';
 export interface OwnedNode {
   id: number;
   level: number;
-  stock: number;
+  max_level: number;
+  stock: number;        // collected, sellable
+  pending: number;      // produced but not yet collected
+  item_value: number;   // units one pickup is worth
+  spawn_interval: number; // seconds between pickups for this producer
   current_cost: number;
   yield_per_sec: number;
   resource_label: string;
@@ -30,12 +34,13 @@ interface GameStore {
   ownedNodes: OwnedNode[];
   offlineEarned: OfflineEntry[];
   pendingClicks: number;
-  fetchGameState: () => Promise<void>;
+  pendingCollects: Record<number, number>;
+  fetchGameState: () => Promise<boolean>;
   buyNode: (nodeId: number) => Promise<void>;
   sellNode: (nodeId: number) => Promise<void>;
   sellAll: () => Promise<void>;
   gather: () => void;
-  tickStocks: (seconds: number) => void;
+  collect: (nodeId: number) => void;
   dismissOfflineEarned: () => void;
 }
 
@@ -43,20 +48,25 @@ export const useGameStore = create<GameStore>((set, get) => {
   // Replace local state with what the server says (server is authoritative).
   const apply = (s: ServerState) =>
     set((prev) => ({
-      // Clicks still waiting to be sent are added back so the number doesn't jump backwards.
+      // Unsent coin clicks are added back so the number doesn't jump backwards.
       currency: s.currency + prev.pendingClicks * s.prestige_multiplier,
       prestigeMultiplier: s.prestige_multiplier,
-      ownedNodes: s.nodes,
+      // Same for collected pickups the server hasn't heard about yet.
+      ownedNodes: s.nodes.map((n) => ({
+        ...n,
+        stock: n.stock + (prev.pendingCollects[n.id] ?? 0) * n.item_value,
+      })),
       // Keep the "welcome back" banner until dismissed; only replace it with a new report.
       offlineEarned: s.offline_earned.length ? s.offline_earned : prev.offlineEarned,
     }));
 
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let clickTimer: ReturnType<typeof setTimeout> | null = null;
+  let collectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const flushClicks = async () => {
-    if (flushTimer) {
-      clearTimeout(flushTimer);
-      flushTimer = null;
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
     }
     const clicks = get().pendingClicks;
     if (clicks === 0) return;
@@ -70,25 +80,58 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
+  const flushCollects = async () => {
+    if (collectTimer) {
+      clearTimeout(collectTimer);
+      collectTimer = null;
+    }
+    const items = Object.entries(get().pendingCollects)
+      .filter(([, count]) => count > 0)
+      .map(([id, count]) => ({ node_id: Number(id), count }));
+    if (items.length === 0) return;
+    set({ pendingCollects: {} });
+    try {
+      const res = await API.post<ServerState>('collect/', { items });
+      apply(res.data);
+    } catch (e) {
+      console.error('collect failed', e);
+      // Put the counts back so they're retried on the next flush.
+      set((prev) => {
+        const merged = { ...prev.pendingCollects };
+        for (const it of items) merged[it.node_id] = (merged[it.node_id] ?? 0) + it.count;
+        return { pendingCollects: merged };
+      });
+    }
+  };
+
+  // Send anything the server hasn't heard about before an action that depends on it.
+  const flushAll = async () => {
+    await flushClicks();
+    await flushCollects();
+  };
+
   return {
     currency: 0,
     prestigeMultiplier: 1,
     ownedNodes: [],
     offlineEarned: [],
     pendingClicks: 0,
+    pendingCollects: {},
 
     fetchGameState: async () => {
-      await flushClicks();
+      await flushAll();
       try {
         const res = await API.get<ServerState>('state/');
         apply(res.data);
+        return true;
       } catch (e) {
         console.error('state failed', e);
+        return false;
       }
     },
 
     buyNode: async (nodeId) => {
-      await flushClicks();
+      await flushAll();
       try {
         const res = await API.post<ServerState>('buy/', { node_id: nodeId });
         apply(res.data);
@@ -99,6 +142,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     sellNode: async (nodeId) => {
+      await flushAll();
       try {
         const res = await API.post<ServerState>('sell/', { node_id: nodeId });
         apply(res.data);
@@ -108,6 +152,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     sellAll: async () => {
+      await flushAll();
       try {
         const res = await API.post<ServerState>('sell/', { all: true });
         apply(res.data);
@@ -116,21 +161,25 @@ export const useGameStore = create<GameStore>((set, get) => {
       }
     },
 
+    // Collecting a coin: +1 gold, saved in batches.
     gather: () => {
       set((s) => ({
         currency: s.currency + s.prestigeMultiplier,
         pendingClicks: s.pendingClicks + 1,
       }));
-      if (!flushTimer) flushTimer = setTimeout(flushClicks, 1500);
+      if (!clickTimer) clickTimer = setTimeout(flushClicks, 1500);
     },
 
-    // Smoothly grow stockpiles on the client between server syncs.
-    tickStocks: (seconds) =>
+    // Collecting a resource pickup: stock goes up now, the server is told in batches.
+    collect: (nodeId) => {
       set((s) => ({
         ownedNodes: s.ownedNodes.map((n) =>
-          n.yield_per_sec > 0 ? { ...n, stock: n.stock + n.yield_per_sec * seconds } : n
+          n.id === nodeId ? { ...n, stock: n.stock + n.item_value } : n
         ),
-      })),
+        pendingCollects: { ...s.pendingCollects, [nodeId]: (s.pendingCollects[nodeId] ?? 0) + 1 },
+      }));
+      if (!collectTimer) collectTimer = setTimeout(flushCollects, 800);
+    },
 
     dismissOfflineEarned: () => set({ offlineEarned: [] }),
   };
