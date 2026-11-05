@@ -70,17 +70,19 @@ def login_user(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def game_state_view(request):
-    """Settle earnings since last visit and return the full game state."""
+    """Settle production since last visit and return the full game state."""
     with transaction.atomic():
         profile = services.get_locked_profile(request.user)
-        earned = services.settle(profile)
-        return Response(services.serialize_state(profile, offline_earned=earned))
+        produced, elapsed = services.settle(profile)
+        # Only report "while you were away" for real absences, not the 30s auto-refresh.
+        offline = produced if elapsed >= services.OFFLINE_REPORT_THRESHOLD else []
+        return Response(services.serialize_state(profile, offline_earned=offline))
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def buy_node_view(request):
-    """Buy one level of a node. The server checks the price; the client can't fake it."""
+    """Buy one level of a producer with gold. The server checks the price."""
     try:
         node = ResourceNode.objects.get(pk=int(request.data.get('node_id')))
     except (TypeError, ValueError):
@@ -90,14 +92,14 @@ def buy_node_view(request):
 
     with transaction.atomic():
         profile = services.get_locked_profile(request.user)
-        services.settle(profile)
+        services.settle(profile)  # credit production at the OLD level before upgrading
 
         owned, _ = PlayerNode.objects.get_or_create(player=profile, node=node)
         cost = services.node_cost(node, owned.level)
 
         if profile.currency < cost:
             body = services.serialize_state(profile)
-            body['error'] = 'Not enough currency.'
+            body['error'] = 'Not enough gold.'
             return Response(body, status=status.HTTP_400_BAD_REQUEST)
 
         profile.currency -= cost
@@ -110,8 +112,42 @@ def buy_node_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def sell_view(request):
+    """Sell stockpiled resources for gold. Send {node_id} for one resource or {all: true} for everything."""
+    sell_all = bool(request.data.get('all'))
+    node_id = request.data.get('node_id')
+
+    if node_id is None and not sell_all:
+        return Response({'error': 'Provide node_id or all=true.'}, status=status.HTTP_400_BAD_REQUEST)
+    if node_id is not None:
+        try:
+            node_id = int(node_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'node_id must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        profile = services.get_locked_profile(request.user)
+        services.settle(profile)
+
+        owned = profile.owned_nodes.select_related('node').filter(stock__gt=0)
+        if node_id is not None:
+            owned = owned.filter(node_id=node_id)
+
+        earned = 0.0
+        for pn in owned:
+            earned += pn.stock * pn.node.sell_price
+            pn.stock = 0.0
+            pn.save(update_fields=['stock'])
+
+        profile.currency += earned
+        profile.save(update_fields=['currency'])
+        return Response(services.serialize_state(profile))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def gather_view(request):
-    """Credit manual clicks. The client batches clicks; the server clamps the batch size."""
+    """Credit manual clicks (as gold). The client batches clicks; the server clamps the batch size."""
     try:
         clicks = int(request.data.get('clicks', 1))
     except (TypeError, ValueError):
