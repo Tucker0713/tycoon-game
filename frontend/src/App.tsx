@@ -40,7 +40,7 @@ export default function App() {
             </button>
           </div>
 
-          <VillageDashboard />
+          <VillageDashboard username={user} />
         </div>
       )}
     </div>

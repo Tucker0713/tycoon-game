@@ -8,6 +8,29 @@ class PlayerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     currency = models.FloatField(default=0.0)
     prestige_multiplier = models.FloatField(default=1.0)
+    spawn_amount_upgrade_level = models.IntegerField(default=0)
+    node_amount_upgrade_level = models.IntegerField(default=0)
+    apple_picker_level = models.IntegerField(default=0)
+    wood_picker_level = models.IntegerField(default=0)
+    stone_picker_level = models.IntegerField(default=0)
+    tool_picker_level = models.IntegerField(default=0)
+    apple_picker_speed_level = models.IntegerField(default=0)
+    wood_picker_speed_level = models.IntegerField(default=0)
+    stone_picker_speed_level = models.IntegerField(default=0)
+    tool_picker_speed_level = models.IntegerField(default=0)
+    player_level = models.IntegerField(default=0)
+    level_xp = models.FloatField(default=0.0)
+    upgrade_points = models.IntegerField(default=0)
+    prestige_count = models.IntegerField(default=0)
+    total_clicks = models.PositiveIntegerField(default=0)
+    total_resources_collected = models.FloatField(default=0.0)
+    total_resources_sold = models.FloatField(default=0.0)
+    total_producers_purchased = models.PositiveIntegerField(default=0)
+    claimed_achievements = models.JSONField(default=list, blank=True)
+    daily_quest_date = models.DateField(null=True, blank=True)
+    daily_quest_data = models.JSONField(default=list, blank=True)
+    active_boost_started_at = models.DateTimeField(null=True, blank=True)
+    active_boost_until = models.DateTimeField(null=True, blank=True)
     last_active = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
@@ -36,9 +59,6 @@ class PlayerNode(models.Model):
     level = models.IntegerField(default=0)
     stock = models.FloatField(default=0.0)    # collected, sellable at the market
     pending = models.FloatField(default=0.0)  # produced but not yet collected (the pickups on the field)
-
-    class Meta:
-        unique_together = ('player', 'node')
 
     def __str__(self):
         return f"{self.player.user.username} - {self.node.name} (Lvl {self.level})"

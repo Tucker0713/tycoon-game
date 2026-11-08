@@ -2,15 +2,18 @@ import React from 'react';
 import { useGameStore } from '../store/useGameStore';
 
 export const Market: React.FC = () => {
-    const { ownedNodes, sellNode, sellAll } = useGameStore();
+    const { ownedNodes, sellNode, sellAll, market } = useGameStore();
 
     const producers = ownedNodes.filter((n) => n.level > 0);
     const totalValue = producers.reduce((sum, n) => sum + n.stock * n.sell_price, 0);
 
     return (
-        <div className="w-full bg-slate-800/80 border border-slate-700 rounded-xl p-4 shadow-md">
-            <div className="flex items-center justify-between mb-3">
-                <h2 className="text-lg font-bold text-slate-100">🏪 Market</h2>
+        <div className="w-full bg-slate-800/80 border border-slate-700 rounded-xl shadow-md overflow-hidden">
+            <div className="min-h-[60px] px-4 py-3 flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-lg font-bold text-slate-100">🏪 Market</h2>
+                    <p className="text-xs text-amber-300">High demand: {market.demand_resource} · rotates every 6 hours</p>
+                </div>
                 <button
                     onClick={sellAll}
                     disabled={totalValue < 0.01}
@@ -24,12 +27,8 @@ export const Market: React.FC = () => {
                 </button>
             </div>
 
-            {producers.length === 0 ? (
-                <p className="text-xs text-slate-400">
-                    Buy a producer to start collecting resources you can sell here.
-                </p>
-            ) : (
-                <ul className="space-y-2">
+            {producers.length > 0 && (
+                <ul className="space-y-2 px-4 pb-4">
                     {producers.map((n) => {
                         const value = n.stock * n.sell_price;
                         const canSell = value >= 0.01;
@@ -43,11 +42,11 @@ export const Market: React.FC = () => {
                                         {n.resource_label}: {n.stock.toFixed(1)}
                                     </div>
                                     <div className="text-xs text-slate-400">
-                                        🌾 {n.sell_price} each
+                                        🪙 {n.sell_price.toFixed(2)} each ({n.market_multiplier > 1 ? '+50%' : '−15%'})
                                     </div>
                                 </div>
                                 <button
-                                    onClick={() => sellNode(n.node.id)}
+                                    onClick={() => sellNode(n.id)}
                                     disabled={!canSell}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
                                         canSell

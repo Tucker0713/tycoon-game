@@ -10,6 +10,15 @@ export interface Pickup {
     label: string;           // for the tooltip
 }
 
+export interface PickerWorker {
+    id: string;
+    name: string;
+    icon: string;
+    x: number;
+    y: number;
+    travelSeconds: number;
+}
+
 export const MAX_PICKUPS = 150;  // total items allowed in the box
 export const MAX_PER_NODE = 25;  // resource items allowed per producer
 
@@ -25,7 +34,7 @@ const COLORS: Record<string, string> = {
 const renderIcon = (icon: string) => {
     switch (icon) {
         case 'coin':
-            return <span className="text-xl leading-none">🌾</span>;
+            return <span className="text-xl leading-none">🪙</span>;
         case 'apple':
         case 'citrus':
             return <Citrus className="w-6 h-6 text-white" />;
@@ -40,10 +49,18 @@ const renderIcon = (icon: string) => {
 
 interface CoinFieldProps {
     pickups: Pickup[];
+    workers: PickerWorker[];
     onCollect: (pickup: Pickup) => void;
 }
 
-export const CoinField: React.FC<CoinFieldProps> = ({ pickups, onCollect }) => (
+const WORKER_COLORS: Record<string, string> = {
+    apple: 'border-amber-400 bg-amber-950',
+    tree: 'border-emerald-400 bg-emerald-950',
+    mountain: 'border-slate-300 bg-slate-800',
+    hammer: 'border-orange-400 bg-orange-950',
+};
+
+export const CoinField: React.FC<CoinFieldProps> = ({ pickups, workers, onCollect }) => (
     <div className="relative w-full h-96 lg:h-[min(70vh,48rem)] lg:min-h-[28rem] rounded-2xl border border-slate-700/60 bg-slate-950/60 overflow-hidden select-none">
         <style>{`
             @keyframes coinPop {
@@ -76,6 +93,24 @@ export const CoinField: React.FC<CoinFieldProps> = ({ pickups, onCollect }) => (
                 >
                     {renderIcon(p.icon)}
                 </button>
+            </div>
+        ))}
+
+        {workers.map((worker) => (
+            <div
+                key={worker.id}
+                aria-label={`${worker.name} traveling to a resource`}
+                title={worker.name}
+                className={`pointer-events-none absolute z-20 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xl shadow-lg transition-all ease-linear ${
+                    WORKER_COLORS[worker.icon] ?? 'border-amber-400 bg-slate-800'
+                }`}
+                style={{
+                    left: `${worker.x}%`,
+                    top: `${worker.y}%`,
+                    transitionDuration: `${worker.travelSeconds}s`,
+                }}
+            >
+                🧑‍🌾
             </div>
         ))}
     </div>
